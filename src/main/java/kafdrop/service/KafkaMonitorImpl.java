@@ -18,22 +18,37 @@
 
 package kafdrop.service;
 
-import kafdrop.model.*;
-import kafdrop.util.*;
-import org.apache.kafka.clients.admin.*;
-import org.apache.kafka.clients.admin.ConfigEntry.*;
-import org.apache.kafka.clients.consumer.*;
-import org.apache.kafka.common.*;
-import org.apache.kafka.common.header.*;
-import org.slf4j.*;
-import org.springframework.stereotype.*;
-
-import java.util.*;
-import java.util.Map.*;
-import java.util.function.*;
-import java.util.stream.*;
-
-import static java.util.function.Predicate.not;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Optional;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import kafdrop.model.AclVO;
+import kafdrop.model.BrokerVO;
+import kafdrop.model.ClusterSummaryVO;
+import kafdrop.model.ConsumerPartitionVO;
+import kafdrop.model.ConsumerTopicVO;
+import kafdrop.model.ConsumerVO;
+import kafdrop.model.CreateTopicVO;
+import kafdrop.model.MessageVO;
+import kafdrop.model.TopicPartitionVO;
+import kafdrop.model.TopicVO;
+import kafdrop.util.Deserializers;
+import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.header.Headers;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
 
 @Service
 public final class KafkaMonitorImpl implements KafkaMonitor {
@@ -43,14 +58,18 @@ public final class KafkaMonitorImpl implements KafkaMonitor {
 
   private final KafkaHighLevelAdminClient highLevelAdminClient;
 
-  public KafkaMonitorImpl(KafkaHighLevelConsumer highLevelConsumer, KafkaHighLevelAdminClient highLevelAdminClient) {
+  private final KafkaCache kafkaCache;
+
+  public KafkaMonitorImpl(KafkaHighLevelConsumer highLevelConsumer,
+                          KafkaHighLevelAdminClient highLevelAdminClient, KafkaCache kafkaCache) {
     this.highLevelConsumer = highLevelConsumer;
     this.highLevelAdminClient = highLevelAdminClient;
+    this.kafkaCache = kafkaCache;
   }
 
   @Override
   public List<BrokerVO> getBrokers() {
-    final var clusterDescription = highLevelAdminClient.describeCluster();
+    final var clusterDescription = kafkaCache.describeCluster();
     final var brokerVos = new ArrayList<BrokerVO>(clusterDescription.nodes.size());
     for (var node : clusterDescription.nodes) {
       final var isController = node.id() == clusterDescription.controller.id();
@@ -93,7 +112,8 @@ public final class KafkaMonitorImpl implements KafkaMonitor {
         })
         .orElseGet(ClusterSummaryVO::new);
     topicSummary.setTopicCount(topics.size());
-    topicSummary.setPreferredReplicaPercent(topics.isEmpty() ? 0 : topicSummary.getPreferredReplicaPercent() / topics.size());
+    topicSummary
+        .setPreferredReplicaPercent(topics.isEmpty() ? 0 : topicSummary.getPreferredReplicaPercent() / topics.size());
     return topicSummary;
   }
 
@@ -116,25 +136,7 @@ public final class KafkaMonitorImpl implements KafkaMonitor {
   }
 
   private Map<String, TopicVO> getTopicMetadata(String... topics) {
-    final var topicInfos = highLevelConsumer.getTopicInfos(topics);
-    final var retrievedTopicNames = topicInfos.keySet();
-    final var topicConfigs = highLevelAdminClient.describeTopicConfigs(retrievedTopicNames);
-
-    for (var topicVo : topicInfos.values()) {
-      final var config = topicConfigs.get(topicVo.getName());
-      if (config != null) {
-        final var configMap = new TreeMap<String, String>();
-        for (var configEntry : config.entries()) {
-          if (configEntry.source() != ConfigSource.DEFAULT_CONFIG &&
-              configEntry.source() != ConfigSource.STATIC_BROKER_CONFIG) {
-            configMap.put(configEntry.name(), configEntry.value());
-          }
-        }
-        topicVo.setConfig(configMap);
-      } else {
-        LOG.warn("Missing config for topic {}", topicVo.getName());
-      }
-    }
+    final var topicInfos = kafkaCache.getTopicInfos(topics);
     return topicInfos;
   }
 
@@ -192,13 +194,13 @@ public final class KafkaMonitorImpl implements KafkaMonitor {
   }
 
   private Map<Integer, TopicPartitionVO> getTopicPartitionSizes(TopicVO topic) {
-    return highLevelConsumer.getPartitionSize(topic.getName());
+    return kafkaCache.getPartitionSize(topic.getName());
   }
 
   @Override
   public List<ConsumerVO> getConsumers(Collection<TopicVO> topicVos) {
     final var topics = topicVos.stream().map(TopicVO::getName).collect(Collectors.toSet());
-    final var consumerGroupOffsets = getConsumerOffsets(topics);
+    final var consumerGroupOffsets = Collections.<ConsumerGroupOffsets>emptyList(); // getConsumerOffsets(topics);
     LOG.debug("consumerGroupOffsets: {}", consumerGroupOffsets);
     LOG.debug("topicVos: {}", topicVos);
     return convert(consumerGroupOffsets, topicVos);
@@ -207,14 +209,14 @@ public final class KafkaMonitorImpl implements KafkaMonitor {
   @Override
   public void createTopic(CreateTopicVO createTopicDto) {
     var newTopic = new NewTopic(
-            createTopicDto.getName(), createTopicDto.getPartitionsNumber(), (short) createTopicDto.getReplicationFactor()
+        createTopicDto.getName(), createTopicDto.getPartitionsNumber(), (short) createTopicDto.getReplicationFactor()
     );
-    highLevelAdminClient.createTopic(newTopic);
+
   }
 
   @Override
   public void deleteTopic(String topic) {
-    highLevelAdminClient.deleteTopic(topic);
+
   }
 
   @Override
@@ -223,15 +225,16 @@ public final class KafkaMonitorImpl implements KafkaMonitor {
     final var aclVos = new ArrayList<AclVO>(acls.size());
     for (var acl : acls) {
       aclVos.add(new AclVO(acl.pattern().resourceType().toString(), acl.pattern().name(),
-              acl.pattern().patternType().toString(), acl.entry().principal(),
-              acl.entry().host(), acl.entry().operation().toString(),
-              acl.entry().permissionType().toString()));
+          acl.pattern().patternType().toString(), acl.entry().principal(),
+          acl.entry().host(), acl.entry().operation().toString(),
+          acl.entry().permissionType().toString()));
     }
     Collections.sort(aclVos);
     return aclVos;
   }
 
-  private static List<ConsumerVO> convert(List<ConsumerGroupOffsets> consumerGroupOffsets, Collection<TopicVO> topicVos) {
+  private static List<ConsumerVO> convert(List<ConsumerGroupOffsets> consumerGroupOffsets,
+                                          Collection<TopicVO> topicVos) {
     final var topicVoMap = topicVos.stream().collect(Collectors.toMap(TopicVO::getName, Function.identity()));
     final var groupTopicPartitionOffsetMap = new TreeMap<String, Map<String, Map<Integer, Long>>>();
 
@@ -303,16 +306,5 @@ public final class KafkaMonitorImpl implements KafkaMonitor {
     }
   }
 
-  private ConsumerGroupOffsets resolveOffsets(String groupId) {
-    return new ConsumerGroupOffsets(groupId, highLevelAdminClient.listConsumerGroupOffsetsIfAuthorized(groupId));
-  }
 
-  private List<ConsumerGroupOffsets> getConsumerOffsets(Set<String> topics) {
-    final var consumerGroups = highLevelAdminClient.listConsumerGroups();
-    return consumerGroups.stream()
-        .map(this::resolveOffsets)
-        .map(offsets -> offsets.forTopics(topics))
-        .filter(not(ConsumerGroupOffsets::isEmpty))
-        .collect(Collectors.toList());
-  }
 }

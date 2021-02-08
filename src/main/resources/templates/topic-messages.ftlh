@@ -21,18 +21,21 @@
         h2 {
             margin-bottom: 16px;
         }
+
         .badge {
             margin-right: 5px;
         }
+
         .toggle-msg {
             float: left;
         }
     </style>
     <script src="<@spring.url '/js/message-inspector.js'/>"></script>
+    <script src="<@spring.url '/js/dataTable.js'/>"></script>
 </@template.header>
 <#setting number_format="0">
 
-<h2>Topic Messages: <a href="<@spring.url '/topic/${topic.name}'/>">${topic.name}</a></h2>
+<h2>Topic Messages Ranjeet: <a href="<@spring.url '/topic/${topic.name}'/>">${topic.name}</a></h2>
 
 <div class="container">
     <#if messages?? && messages?size gt 0>
@@ -51,6 +54,48 @@
         </#list>
 
     </#if>
+    <h1>Ranjeet </h1>
+    <table id="example" class="table table-striped table-bordered" style="width:100%">
+        <thead>
+        <tr>
+            <th>Name</th>
+            <th>Position</th>
+            <th>Office</th>
+            <th>Age</th>
+            <th>Start date</th>
+            <th>Salary</th>
+        </tr>
+        </thead>
+        <tbody>
+        <#if messages?? && messages?size gt 0>
+            <#list messages as msg>
+                <tr>
+                    <td> ${msg.key!''} &nbsp;</td>
+                    <td>${msg.headersFormatted}</td>
+                    <td>${msg.partition} &nbsp;</td>
+                    <td>${msg.offset} &nbsp;</td>
+                    <td> ${msg.timestamp?string('yyyy-MM-dd HH:mm:ss.SSS')}</td>
+                    <td>
+                        <div>
+                            <a href="#" class="toggle-msg"><i class="fa fa-chevron-circle-right">&nbsp;</i></a>
+                            <pre class="message-body">${msg.message!''}</pre>
+                        </div>
+                    </td>
+                </tr>
+            </#list>
+        </#if>
+        </tbody>
+        <tfoot>
+        <tr>
+            <th>Name</th>
+            <th>Position</th>
+            <th>Office</th>
+            <th>Age</th>
+            <th>Start date</th>
+            <th>Salary</th>
+        </tr>
+        </tfoot>
+    </table>
 </div>
 
 <@template.footer/>

@@ -25,10 +25,11 @@ management:
 
 kafdrop.monitor:
   clientId: Kafdrop
-
+topic:
+  createEnabled:false
 kafka:
-  brokerConnect: localhost:9092
-  isSecured: false
+  brokerConnect: kafka-850815958-4-864307700.stg-southcentralus-az.kafka-health-wellness-stg.ms-df-messaging.stg-az-southcentralus-7.prod.us.walmart.net:5731
+  isSecured: true
   saslMechanism: "PLAIN"
   securityProtocol: "SASL_PLAINTEXT"
   truststoreFile: "${KAFKA_TRUSTSTORE_FILE:kafka.truststore.jks}"
